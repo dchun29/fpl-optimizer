@@ -122,13 +122,13 @@ export async function fetchLastSeasonTeamStrength(previousSeason) {
 }
 
 /**
- * Last season's per-90 xG/xA for every player who played a meaningful
- * amount, keyed by stable cross-season `code`. Used to shrink this
- * season's still-tiny-sample rate toward a track record (see the `shrink`
- * helper in projections.js' projectPlayer) — so 1-2 gameweeks of noise
- * doesn't wildly over- or understate a player's real level. Players with a
- * short prior-season stint (under 2 full games) are dropped rather than
- * kept as a noisy prior in their own right.
+ * Last season's per-90 xG/xA/defensive-contribution for every player who
+ * played a meaningful amount, keyed by stable cross-season `code`. Used to
+ * shrink this season's still-tiny-sample rate toward a track record (see
+ * the `shrink` helper in projections.js' projectPlayer) — so 1-2 gameweeks
+ * of noise doesn't wildly over- or understate a player's real level.
+ * Players with a short prior-season stint (under 2 full games) are dropped
+ * rather than kept as a noisy prior in their own right.
  */
 export async function fetchLastSeasonPlayerRates(previousSeason) {
   try {
@@ -143,6 +143,7 @@ export async function fetchLastSeasonPlayerRates(previousSeason) {
       byCode[code] = {
         xG90: num(r.expected_goals_per_90) ?? 0,
         xA90: num(r.expected_assists_per_90) ?? 0,
+        dc90: num(r.defensive_contribution_per_90) ?? 0,
         minutes,
       };
     }
