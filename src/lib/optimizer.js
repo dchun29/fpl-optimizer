@@ -1,4 +1,4 @@
-import { projectPlayer, buildLeagueAverages, buildFixturesByTeamEvent, countFinishedEvents } from './projections.js';
+import { projectPlayer, buildLeagueAverages, buildFixturesByTeamEvent, buildGamesPlayedByTeam } from './projections.js';
 
 export const POS_LABEL = { 1: 'GKP', 2: 'DEF', 3: 'MID', 4: 'FWD' };
 
@@ -21,7 +21,7 @@ function sum(arr) {
 export function buildProjectionContext(bootstrap, fixtures, fromEventId, horizon = 6) {
   return {
     fixturesByTeamEvent: buildFixturesByTeamEvent(fixtures),
-    gamesPlayed: countFinishedEvents(bootstrap.events),
+    gamesPlayedByTeam: buildGamesPlayedByTeam(fixtures),
     teamsById: Object.fromEntries(bootstrap.teams.map((t) => [t.id, t])),
     leagueAvg: buildLeagueAverages(bootstrap.teams),
     fromEventId,
@@ -34,7 +34,7 @@ function scoreElement(el, ctx) {
     el,
     ctx.fixturesByTeamEvent,
     ctx.fromEventId,
-    ctx.gamesPlayed,
+    ctx.gamesPlayedByTeam,
     ctx.teamsById,
     ctx.leagueAvg,
     ctx.horizon
@@ -135,10 +135,10 @@ function toCandidate(el, ctx, teamsById) {
 
 /**
  * Exhaustively checks every affordable same-position replacement for every
- * squad player (single transfers), then checks paired transfers among the
- * squad's weakest players against the best independent replacements for
- * each — so both one- and two-transfer plans are genuinely searched, not
- * just "swap the worst player."
+ * squad player (single transfers), then checks paired and tripled transfers
+ * among the squad's weakest players against the best independent
+ * replacements for each — so one-, two-, and three-transfer plans are all
+ * genuinely searched, not just "swap the worst player."
  */
 export function suggestTransfers(squad, allElements, ctx, bankTenths, freeTransfers = 1) {
   const squadIds = new Set(squad.map((p) => p.element));
@@ -194,6 +194,34 @@ export function suggestTransfers(squad, allElements, ctx, bankTenths, freeTransf
     }
   }
 
+  // Triple transfers: same idea as pairs, extended to every 3-of-8 combination
+  // from the weak pool (56 combos — cheap to check exhaustively). Worth
+  // surfacing separately from the pair search because the extra -4 hit means
+  // a triple only clears the bar when it's genuinely a bigger overhaul, not
+  // just "the pair plus one more."
+  let bestTriple = null;
+  for (let i = 0; i < weakPool.length; i++) {
+    for (let j = i + 1; j < weakPool.length; j++) {
+      for (let k = j + 1; k < weakPool.length; k++) {
+        const legs = [weakPool[i], weakPool[j], weakPool[k]].map((out) =>
+          singleOptions.find((s) => s.out.element === out.element)
+        );
+        if (legs.some((l) => !l?.best)) continue;
+        const inIds = new Set(legs.map((l) => l.best.id));
+        if (inIds.size < 3) continue; // can't buy the same player twice
+
+        const totalBudget = legs.reduce((s, l) => s + l.out.sellPrice, 0) + bankTenths;
+        const totalCost = legs.reduce((s, l) => s + l.best.nowCost, 0);
+        if (totalCost > totalBudget) continue;
+
+        const gain = legs.reduce((s, l) => s + l.gain, 0);
+        if (!bestTriple || gain > bestTriple.gain) {
+          bestTriple = { legs, gain };
+        }
+      }
+    }
+  }
+
   const suggestions = [];
   const GAIN_THRESHOLD = 1.5; // in horizon-weighted points, ~ next-gameweek-equivalent
 
@@ -202,6 +230,9 @@ export function suggestTransfers(squad, allElements, ctx, bankTenths, freeTransf
   }
   if (bestPair && bestPair.gain > GAIN_THRESHOLD * 1.6) {
     suggestions.push(buildSuggestionCard(bestPair.legs, freeTransfers));
+  }
+  if (bestTriple && bestTriple.gain > GAIN_THRESHOLD * 2.2) {
+    suggestions.push(buildSuggestionCard(bestTriple.legs, freeTransfers));
   }
 
   return suggestions.sort((a, b) => b.gain - a.gain);
