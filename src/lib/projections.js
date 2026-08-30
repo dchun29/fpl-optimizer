@@ -9,6 +9,24 @@ const GOAL_PTS = { 1: 10, 2: 6, 3: 5, 4: 4 };
 const CS_PTS = { 1: 4, 2: 4, 3: 1, 4: 0 };
 const ASSIST_PTS = 3;
 
+// How much each gameweek in the horizon counts toward horizonScore — this
+// week fully, then decaying (next-week fixtures/form matter far more than
+// week 6's). Shared by projectPlayer and horizonWeightSum so the two never
+// drift apart.
+const HORIZON_DECAY_WEIGHTS = [1, 0.6, 0.42, 0.3, 0.22, 0.16, 0.12, 0.09];
+
+/**
+ * Sum of the decay weights actually used for a given horizon. Dividing
+ * horizonScore by this turns it back into a weighted-average points-per-
+ * gameweek figure, on the same scale as the single-week `score` — needed
+ * to blend the two into one lineup/captain ranking.
+ */
+export function horizonWeightSum(horizon) {
+  let sum = 0;
+  for (let i = 0; i < horizon; i++) sum += HORIZON_DECAY_WEIGHTS[i] ?? 0;
+  return sum || 1;
+}
+
 /** League-average attack/defence strength, used to normalize fixture difficulty. */
 export function buildLeagueAverages(teams) {
   const FALLBACK_STRENGTH = 1100; // reasonable mid-table default if a team is missing a field
@@ -166,7 +184,7 @@ export function projectPlayer(el, fixturesByTeamEvent, fromEvent, gamesPlayedByT
   el = { ...el, bonusPerGame: gamesPlayed > 0 ? bonusTotal / gamesPlayed : 0 };
 
   const teamFixtures = fixturesByTeamEvent[el.team] || {};
-  const weights = [1, 0.6, 0.42, 0.3, 0.22, 0.16, 0.12, 0.09];
+  const weights = HORIZON_DECAY_WEIGHTS;
 
   let nextEventPts = 0;
   let horizonScore = 0;
