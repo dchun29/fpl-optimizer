@@ -11,16 +11,33 @@ starting XI, captain/vice-captain, and up to three transfers.
   `fantasy.premierleague.com/api/*` endpoints. The FPL API doesn't send CORS
   headers, so the browser can't call it directly; this function fetches
   server-side and hands the JSON back.
-- **`src/lib/optimizer.js`** — the scoring and selection logic:
-  - Each player's score = FPL's `ep_next` (or a form/PPG blend if that's
-    missing), nudged for their next fixture's difficulty rating, scaled down
-    by their chance of actually playing (from `chance_of_playing_next_round`
-    / status flags).
-  - Starting XI: tries every valid formation (3–5 DEF, 2–5 MID, 1–3 FWD) and
-    picks the one with the highest total score from your 15-man squad.
-  - Captain/vice: the two highest scorers in your starting XI.
-  - Transfers: for your weakest/flagged squad members, checks whether an
-    affordable same-position replacement scores meaningfully higher.
+- **`src/lib/projections.js`** — a from-scratch expected-points model, built
+  up from underlying stats instead of leaning on FPL's own `ep_next`:
+  - Attacking return (goals/assists) from each player's xG/xA per 90,
+    scaled by their actual playing-time pattern and adjusted for the
+    opponent's defensive strength (using the teams' home/away attack &
+    defence ratings, not just the single 1-5 difficulty number).
+  - Clean-sheet probability derived the same way, feeding clean-sheet
+    points and an expected-goals-conceded penalty for GK/DEF.
+  - A bonus-points estimate from each player's season bonus-per-game rate.
+  - Everything is scaled by immediate availability (injury/suspension
+    status), and projected across the next 6 gameweeks — so a double
+    gameweek sums both fixtures, a blank scores zero, and near-term weeks
+    count more than distant ones (decaying weights).
+- **`src/lib/optimizer.js`** — starting XI (best valid formation from the
+  15-man squad), captain/vice (top two scorers), and the transfer search:
+  every squad player is checked against every affordable same-position
+  replacement (not just the weakest one), using the 6-week horizon score,
+  plus a paired-transfer search among the 8 weakest/most-flagged squad
+  members for double-transfer plans — each shown with its -4 hit cost and
+  net gain after the hit.
+- **`src/lib/chipAdvisor.js`** — scans the fixture list for double and
+  blank gameweeks among your squad's teams (Bench Boost / Free Hit
+  triggers), finds the single highest-ceiling gameweek for any squad player
+  (Triple Captain), and flags when your weakest four players are projected
+  well below your squad average (Wildcard signal). Only fires when the
+  signal is strong — otherwise says so plainly, since doubles/blanks are
+  usually confirmed only a few weeks out.
 - **`src/components/PitchView.jsx`** — draws your starting XI on a pitch
   diagram in their formation, with a gold armband on the captain.
 - **`/api/my-team.js`** — optional: logs into your FPL account server-side
@@ -78,14 +95,23 @@ to re-enter it.
 
 ## Known limitations
 
-- **Sell price** is approximated as the player's current market price. FPL's
-  actual sell price can be a few tenths of a million lower if the player has
-  risen in price since you bought them (their profit-sharing rule), so treat
-  the transfer budget as a close estimate, not gospel.
-- **Free transfers** aren't available from the public API (chip usage,
-  saved transfers, etc. aren't exposed), so you tell the app how many you
-  have via the dropdown — it uses that only to flag which suggested
-  transfers would cost a -4 hit.
-- Projections are a planning aid based on FPL's own point projections and
-  fixture ratings — not a betting model. Always sanity-check flagged/
-  doubtful players close to the deadline.
+- **The projection model is a heuristic, not a betting-grade model.** It's
+  built from public underlying stats (xG/xA, bonus history, team
+  attack/defence ratings) with a reasonably principled formula, but it
+  hasn't been backtested against actual results — treat it as a
+  well-informed second opinion, not gospel. Always sanity-check flagged
+  players and confirmed lineups close to the deadline.
+- **New signings / returning-from-injury players** can look undervalued:
+  their `minutes` total only covers games since they were available, but
+  the model divides by the season's total games played, understating their
+  per-game rate. This self-corrects as they accumulate more games.
+- **Doubles/blanks** only show up once the fixture list has an event number
+  assigned to them, which the Premier League/FPL usually confirms only a
+  few gameweeks ahead of a rearrangement — so the chip advisor may go quiet
+  even in seasons that end up having them later on.
+- **Sell price** is approximated as the player's current market price
+  unless you've set up the optional FPL login (see above). FPL's actual
+  sell price can be a few tenths of a million lower if the player has risen
+  in price since you bought them (their profit-sharing rule).
+- **Free transfers** default to a manual dropdown unless you've set up the
+  optional FPL login, which pulls your exact count automatically.

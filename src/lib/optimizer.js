@@ -1,3 +1,5 @@
+import { projectPlayer, buildLeagueAverages, buildFixturesByTeamEvent, countFinishedEvents } from './projections.js';
+
 export const POS_LABEL = { 1: 'GKP', 2: 'DEF', 3: 'MID', 4: 'FWD' };
 
 const VALID_FORMATIONS = (() => {
@@ -15,98 +17,43 @@ function sum(arr) {
   return arr.reduce((s, p) => s + p.score, 0);
 }
 
-/** How likely a player is to actually play their next match, 0-1. */
-function computeAvailability(el) {
-  if (el.status === 'a') {
-    return el.chance_of_playing_next_round == null ? 1 : el.chance_of_playing_next_round / 100;
-  }
-  if (el.chance_of_playing_next_round != null) return el.chance_of_playing_next_round / 100;
-  if (el.status === 'd') return 0.5;
-  return 0; // injured, suspended, unavailable, on loan elsewhere, etc.
-}
-
-/** FPL publishes its own next-gameweek points estimate (ep_next); fall back to form/PPG if it's missing. */
-function baseExpectedPoints(el) {
-  const ep = parseFloat(el.ep_next);
-  if (!Number.isNaN(ep) && ep > 0) return ep;
-  const form = parseFloat(el.form) || 0;
-  const ppg = parseFloat(el.points_per_game) || 0;
-  return form * 0.6 + ppg * 0.4;
-}
-
-/**
- * Combined next-gameweek score: FPL's expected points, nudged for fixture
- * difficulty, scaled down by the chance a flagged player doesn't actually play.
- */
-export function scorePlayer(el, fixtureInfo) {
-  const availability = computeAvailability(el);
-  const base = baseExpectedPoints(el);
-  const difficulty = fixtureInfo?.nextDifficulty ?? 3;
-  const fixtureAdj = (3 - difficulty) * 0.18;
-  const rawScore = Math.max(0, base + fixtureAdj) * availability;
+/** Bundles the per-team/per-gameweek context the projection engine needs, computed once per load. */
+export function buildProjectionContext(bootstrap, fixtures, fromEventId, horizon = 6) {
   return {
-    score: Math.round(rawScore * 100) / 100,
-    base: Math.round(base * 100) / 100,
-    availability,
-    difficulty,
-    avgDifficulty: fixtureInfo?.avgDifficulty ?? 3,
-    hasFlag: el.status !== 'a',
-    statusLabel: statusLabel(el),
+    fixturesByTeamEvent: buildFixturesByTeamEvent(fixtures),
+    gamesPlayed: countFinishedEvents(bootstrap.events),
+    teamsById: Object.fromEntries(bootstrap.teams.map((t) => [t.id, t])),
+    leagueAvg: buildLeagueAverages(bootstrap.teams),
+    fromEventId,
+    horizon,
   };
 }
 
-function statusLabel(el) {
-  if (el.status === 'a') return null;
-  const map = { d: 'Doubtful', i: 'Injured', s: 'Suspended', u: 'Unavailable', n: 'Not in squad' };
-  const base = map[el.status] || 'Flagged';
-  if (el.chance_of_playing_next_round != null) {
-    return `${base} (${el.chance_of_playing_next_round}% chance)`;
-  }
-  return base;
-}
-
-/** Maps team id -> next-fixture and 3-gameweek-lookahead difficulty info. */
-export function buildTeamFixtureMap(fixtures, fromEventId, lookahead = 3) {
-  const map = {};
-  const upcoming = fixtures
-    .filter((f) => f.event != null && f.event >= fromEventId && f.event < fromEventId + lookahead)
-    .sort((a, b) => a.event - b.event);
-
-  for (const f of upcoming) {
-    for (const side of ['team_h', 'team_a']) {
-      const teamId = f[side];
-      const isHome = side === 'team_h';
-      const difficulty = isHome ? f.team_h_difficulty : f.team_a_difficulty;
-      const oppId = isHome ? f.team_a : f.team_h;
-      if (!map[teamId]) map[teamId] = { fixtures: [] };
-      map[teamId].fixtures.push({ event: f.event, difficulty, oppId, isHome });
-    }
-  }
-
-  for (const teamId in map) {
-    const list = map[teamId].fixtures.sort((a, b) => a.event - b.event);
-    map[teamId].nextDifficulty = list[0]?.difficulty ?? 3;
-    map[teamId].nextOppId = list[0]?.oppId ?? null;
-    map[teamId].nextIsHome = list[0]?.isHome ?? null;
-    map[teamId].avgDifficulty = list.length
-      ? list.reduce((s, x) => s + x.difficulty, 0) / list.length
-      : 3;
-  }
-  return map;
+function scoreElement(el, ctx) {
+  return projectPlayer(
+    el,
+    ctx.fixturesByTeamEvent,
+    ctx.fromEventId,
+    ctx.gamesPlayed,
+    ctx.teamsById,
+    ctx.leagueAvg,
+    ctx.horizon
+  );
 }
 
 /**
- * Builds squad player objects (joined + scored) from a picks response.
+ * Builds squad player objects (joined + projected) from a picks response.
  * `sellPriceById`, when provided (from the authenticated my-team endpoint),
  * gives each player's exact sell price; otherwise it's approximated as
  * their current market price.
  */
-export function buildScoredSquad(picks, elementsById, teamsById, teamFixtureMap, sellPriceById = {}) {
+export function buildScoredSquad(picks, elementsById, ctx, sellPriceById = {}) {
   return picks.map((pick) => {
     const el = elementsById[pick.element];
-    const fixtureInfo = teamFixtureMap[el.team];
-    const scoring = scorePlayer(el, fixtureInfo);
-    const opp = fixtureInfo?.nextOppId ? teamsById[fixtureInfo.nextOppId] : null;
+    const projection = scoreElement(el, ctx);
+    const nextFixtures = projection.perEvent[0]?.fixtureCount ?? 0;
+    const nextOppId = ctx.fixturesByTeamEvent[el.team]?.[ctx.fromEventId]?.[0]?.oppId;
+    const opp = nextOppId ? ctx.teamsById[nextOppId] : null;
     const hasLiveSellPrice = Object.prototype.hasOwnProperty.call(sellPriceById, el.id);
     return {
       element: el.id,
@@ -114,14 +61,13 @@ export function buildScoredSquad(picks, elementsById, teamsById, teamFixtureMap,
       elementType: el.element_type,
       posLabel: POS_LABEL[el.element_type],
       teamId: el.team,
-      teamShort: teamsById[el.team]?.short_name ?? '',
+      teamShort: ctx.teamsById[el.team]?.short_name ?? '',
       nowCost: el.now_cost,
       sellPrice: hasLiveSellPrice ? sellPriceById[el.id] : el.now_cost,
       sellPriceIsLive: hasLiveSellPrice,
-      oppShort: opp ? opp.short_name : '—',
-      oppIsHome: fixtureInfo?.nextIsHome ?? null,
+      oppShort: opp ? opp.short_name : nextFixtures === 0 ? 'BLANK' : '—',
       wasOriginalCaptain: !!pick.is_captain,
-      ...scoring,
+      ...projection,
     };
   });
 }
@@ -161,54 +107,115 @@ export function pickCaptains(starters) {
   return { captain: sorted[0], viceCaptain: sorted[1] };
 }
 
-/**
- * Suggests up to `maxSuggestions` transfers: weakest/flagged squad players
- * swapped for the best-scoring affordable replacement in the same position.
- */
-export function suggestTransfers(squad, allElements, teamsById, teamFixtureMap, bankTenths, maxSuggestions = 3) {
-  const squadIds = new Set(squad.map((p) => p.element));
-  const suggestions = [];
-
-  const weakLinks = [...squad].sort((a, b) => {
-    if (a.hasFlag !== b.hasFlag) return a.hasFlag ? -1 : 1;
-    return a.score - b.score;
-  });
-
-  for (const out of weakLinks) {
-    if (suggestions.length >= maxSuggestions) break;
-    const budget = out.sellPrice + bankTenths;
-    const pool = allElements.filter(
-      (p) => p.element_type === out.elementType && !squadIds.has(p.id) && p.now_cost <= budget
-    );
-
-    let bestCandidate = null;
-    for (const p of pool) {
-      const fixtureInfo = teamFixtureMap[p.team];
-      const scoring = scorePlayer(p, fixtureInfo);
-      if (!bestCandidate || scoring.score > bestCandidate.score) {
-        bestCandidate = { player: p, ...scoring };
+/** Finds the best triple-captain candidate across the horizon: highest single-event ceiling, doubles weighted up. */
+export function findCaptaincyCeiling(squad) {
+  let best = null;
+  for (const p of squad) {
+    for (const ev of p.perEvent) {
+      if (ev.pts <= 0) continue;
+      const ceiling = ev.fixtureCount >= 2 ? ev.pts * 1.05 : ev.pts;
+      if (!best || ceiling > best.ceiling) {
+        best = { player: p, eventId: ev.eventId, pts: ev.pts, isDouble: ev.fixtureCount >= 2, ceiling };
       }
     }
+  }
+  return best;
+}
 
-    if (bestCandidate && bestCandidate.score > out.score + 0.75) {
-      const opp = teamFixtureMap[bestCandidate.player.team]?.nextOppId;
-      suggestions.push({
-        out,
-        in: {
-          id: bestCandidate.player.id,
-          webName: bestCandidate.player.web_name,
-          teamShort: teamsById[bestCandidate.player.team]?.short_name ?? '',
-          nowCost: bestCandidate.player.now_cost,
-          oppShort: opp ? teamsById[opp]?.short_name ?? '—' : '—',
-          score: bestCandidate.score,
-          statusLabel: bestCandidate.statusLabel,
-        },
-        gain: Math.round((bestCandidate.score - out.score) * 100) / 100,
-        costDelta: bestCandidate.player.now_cost - out.sellPrice,
-      });
-      squadIds.add(bestCandidate.player.id);
+function toCandidate(el, ctx, teamsById) {
+  const projection = scoreElement(el, ctx);
+  return {
+    id: el.id,
+    webName: el.web_name,
+    teamShort: teamsById[el.team]?.short_name ?? '',
+    nowCost: el.now_cost,
+    ...projection,
+  };
+}
+
+/**
+ * Exhaustively checks every affordable same-position replacement for every
+ * squad player (single transfers), then checks paired transfers among the
+ * squad's weakest players against the best independent replacements for
+ * each — so both one- and two-transfer plans are genuinely searched, not
+ * just "swap the worst player."
+ */
+export function suggestTransfers(squad, allElements, ctx, bankTenths, freeTransfers = 1) {
+  const squadIds = new Set(squad.map((p) => p.element));
+  const byPosition = { 1: [], 2: [], 3: [], 4: [] };
+  for (const el of allElements) {
+    if (squadIds.has(el.id)) continue;
+    byPosition[el.element_type].push(el);
+  }
+
+  // Best single-transfer option for every squad player (using multi-week horizon score).
+  const singleOptions = squad.map((out) => {
+    const budget = out.sellPrice + bankTenths;
+    const pool = byPosition[out.elementType].filter((p) => p.now_cost <= budget);
+    let best = null;
+    for (const p of pool) {
+      const cand = toCandidate(p, ctx, ctx.teamsById);
+      if (!best || cand.horizonScore > best.horizonScore) best = cand;
+    }
+    return { out, best, gain: best ? best.horizonScore - out.horizonScore : -Infinity };
+  });
+
+  singleOptions.sort((a, b) => b.gain - a.gain);
+  const bestSingle = singleOptions[0];
+
+  // Paired transfers: among the 8 weakest/most-flagged squad players, try every
+  // pair, each leg using its own best independent replacement, checked jointly
+  // against combined budget.
+  const weakPool = [...squad]
+    .sort((a, b) => {
+      if (a.hasFlag !== b.hasFlag) return a.hasFlag ? -1 : 1;
+      return a.horizonScore - b.horizonScore;
+    })
+    .slice(0, 8);
+
+  let bestPair = null;
+  for (let i = 0; i < weakPool.length; i++) {
+    for (let j = i + 1; j < weakPool.length; j++) {
+      const outA = weakPool[i];
+      const outB = weakPool[j];
+      const singleA = singleOptions.find((s) => s.out.element === outA.element);
+      const singleB = singleOptions.find((s) => s.out.element === outB.element);
+      if (!singleA?.best || !singleB?.best) continue;
+      if (singleA.best.id === singleB.best.id) continue; // can't buy the same player twice
+
+      const totalBudget = outA.sellPrice + outB.sellPrice + bankTenths;
+      const totalCost = singleA.best.nowCost + singleB.best.nowCost;
+      if (totalCost > totalBudget) continue;
+
+      const gain = singleA.gain + singleB.gain;
+      if (!bestPair || gain > bestPair.gain) {
+        bestPair = { legs: [singleA, singleB], gain };
+      }
     }
   }
 
-  return suggestions;
+  const suggestions = [];
+  const GAIN_THRESHOLD = 1.5; // in horizon-weighted points, ~ next-gameweek-equivalent
+
+  if (bestSingle?.best && bestSingle.gain > GAIN_THRESHOLD) {
+    suggestions.push(buildSuggestionCard([bestSingle], freeTransfers));
+  }
+  if (bestPair && bestPair.gain > GAIN_THRESHOLD * 1.6) {
+    suggestions.push(buildSuggestionCard(bestPair.legs, freeTransfers));
+  }
+
+  return suggestions.sort((a, b) => b.gain - a.gain);
+}
+
+function buildSuggestionCard(legs, freeTransfers) {
+  const gain = legs.reduce((s, l) => s + l.gain, 0);
+  const transferCount = legs.length;
+  const hitCost = Math.max(0, transferCount - freeTransfers) * 4;
+  return {
+    legs: legs.map((l) => ({ out: l.out, in: l.best, gain: Math.round(l.gain * 100) / 100 })),
+    transferCount,
+    gain: Math.round(gain * 100) / 100,
+    hitCost,
+    netGain: Math.round((gain - hitCost) * 100) / 100,
+  };
 }

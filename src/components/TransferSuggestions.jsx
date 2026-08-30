@@ -2,56 +2,67 @@ function fmtCost(tenths) {
   return `£${(tenths / 10).toFixed(1)}m`;
 }
 
-function reasonFor(sug) {
-  const bits = [];
-  if (sug.out.hasFlag) {
-    bits.push(`<b>${sug.out.webName}</b> is flagged — ${sug.out.statusLabel?.toLowerCase()}`);
-  } else if (sug.out.avgDifficulty >= 3.5) {
-    bits.push(`<b>${sug.out.webName}</b> has a tough run of fixtures ahead`);
-  } else {
-    bits.push(`<b>${sug.out.webName}</b> is projected for the lowest points of your squad`);
+function reasonForLeg(leg) {
+  if (leg.out.hasFlag) {
+    return `${leg.out.webName} is flagged — ${leg.out.statusLabel?.toLowerCase()}`;
   }
-  bits.push(`<b>${sug.in.webName}</b> is projected for ${sug.in.score.toFixed(1)} pts next gameweek${sug.in.oppShort !== '—' ? ` vs ${sug.in.oppShort}` : ''}.`);
-  return bits.join('. ') + '.';
+  if (leg.out.isBlankNext) {
+    return `${leg.out.webName} has no fixture next gameweek`;
+  }
+  return `${leg.out.webName} projects lowest of the pair over the next few gameweeks`;
 }
 
-export default function TransferSuggestions({ suggestions, freeTransfers }) {
+export default function TransferSuggestions({ suggestions }) {
   if (!suggestions.length) {
     return (
       <div className="no-transfers">
-        Your squad looks solid for next gameweek — no transfer clearly beats what you're already
-        rostered. Bank your free transfer.
+        Your squad's projected points hold up well against the market over the next few
+        gameweeks — no transfer clearly beats what you're already rostered. Bank your free
+        transfer.
       </div>
     );
   }
 
   return (
     <div>
-      {suggestions.map((sug, i) => {
-        const overFree = i >= freeTransfers;
-        return (
-          <div className="transfer-card" key={sug.out.element}>
-            <div className="transfer-row">
+      {suggestions.map((sug, i) => (
+        <div className="transfer-card" key={i}>
+          <div className="transfer-plan-label">
+            {sug.transferCount === 1 ? 'Single transfer' : 'Double transfer'}
+            {sug.hitCost > 0 && <span className="hit-badge">−{sug.hitCost} hit</span>}
+          </div>
+
+          {sug.legs.map((leg, li) => (
+            <div className="transfer-row" key={li} style={{ marginTop: li > 0 ? 12 : 0 }}>
               <div className="transfer-side out">
                 <div className="label">Out</div>
-                <div className="pname">{sug.out.webName}</div>
-                <div className="psub">{sug.out.teamShort} · {fmtCost(sug.out.sellPrice)}</div>
+                <div className="pname">{leg.out.webName}</div>
+                <div className="psub">
+                  {leg.out.teamShort} · {fmtCost(leg.out.sellPrice)}
+                </div>
               </div>
               <div className="transfer-arrow">→</div>
               <div className="transfer-side in">
                 <div className="label">In</div>
-                <div className="pname">{sug.in.webName}</div>
-                <div className="psub">{sug.in.teamShort} · {fmtCost(sug.in.nowCost)}</div>
+                <div className="pname">{leg.in.webName}</div>
+                <div className="psub">
+                  {leg.in.teamShort} · {fmtCost(leg.in.nowCost)}
+                </div>
               </div>
             </div>
-            <div className="transfer-reason" dangerouslySetInnerHTML={{ __html: reasonFor(sug) }} />
-            <div className="transfer-gain">
-              +{sug.gain.toFixed(1)} projected pts next GW
-              {overFree ? ' · costs a -4 hit (beyond your free transfers)' : ' · free transfer'}
-            </div>
+          ))}
+
+          <div className="transfer-reason">
+            {sug.legs.map((l) => reasonForLeg(l)).join('. ')}. Replacements project higher over
+            the next several gameweeks, not just next week.
           </div>
-        );
-      })}
+
+          <div className="transfer-gain">
+            +{sug.gain.toFixed(1)} pts over horizon
+            {sug.hitCost > 0 ? ` · net +${sug.netGain.toFixed(1)} pts after the hit` : ' · within your free transfers'}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }

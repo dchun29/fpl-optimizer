@@ -4,16 +4,20 @@ import TeamIdSetup from './components/TeamIdSetup.jsx';
 import PitchView from './components/PitchView.jsx';
 import BenchStrip from './components/BenchStrip.jsx';
 import TransferSuggestions from './components/TransferSuggestions.jsx';
+import ChipAdvisor from './components/ChipAdvisor.jsx';
 import { getBootstrap, getFixtures, getEntry, getEntryPicks, getMyTeam } from './lib/api.js';
 import {
-  buildTeamFixtureMap,
+  buildProjectionContext,
   buildScoredSquad,
   selectBestXI,
   pickCaptains,
+  findCaptaincyCeiling,
   suggestTransfers,
 } from './lib/optimizer.js';
+import { scanFixtureAnomalies, buildChipAdvice } from './lib/chipAdvisor.js';
 
 const STORAGE_KEY = 'fpl_team_id';
+const HORIZON = 6;
 
 export default function App() {
   const [teamId, setTeamId] = useState(() => localStorage.getItem(STORAGE_KEY) || '');
@@ -41,10 +45,9 @@ export default function App() {
       }
 
       const picksResp = await getEntryPicks(id, currentEvent.id);
-
       const elementsById = Object.fromEntries(bootstrap.elements.map((e) => [e.id, e]));
-      const teamsById = Object.fromEntries(bootstrap.teams.map((t) => [t.id, t]));
-      const teamFixtureMap = buildTeamFixtureMap(fixtures, nextEvent.id, 3);
+
+      const ctx = buildProjectionContext(bootstrap, fixtures, nextEvent.id, HORIZON);
 
       // Try to get exact sell prices / bank / free-transfer count from the
       // authenticated my-team endpoint. Falls back cleanly if credentials
@@ -57,18 +60,16 @@ export default function App() {
         : {};
       const bank = isLive ? myTeam.data.transfers.bank : picksResp.entry_history?.bank ?? 0;
       const liveFreeTransfers = isLive ? myTeam.data.transfers.limit : null;
+      const effectiveFreeTransfers = typeof liveFreeTransfers === 'number' ? liveFreeTransfers : freeTransfers;
 
-      const squad = buildScoredSquad(picksResp.picks, elementsById, teamsById, teamFixtureMap, sellPriceById);
+      const squad = buildScoredSquad(picksResp.picks, elementsById, ctx, sellPriceById);
       const { starters, bench, formation } = selectBestXI(squad);
       const { captain, viceCaptain } = pickCaptains(starters);
-      const transferSuggestions = suggestTransfers(
-        squad,
-        bootstrap.elements,
-        teamsById,
-        teamFixtureMap,
-        bank,
-        3
-      );
+      const captaincyCeiling = findCaptaincyCeiling(squad);
+      const transferSuggestions = suggestTransfers(squad, bootstrap.elements, ctx, bank, effectiveFreeTransfers);
+
+      const anomalies = scanFixtureAnomalies(ctx.fixturesByTeamEvent, nextEvent.id, HORIZON, ctx.teamsById);
+      const chipAdvice = buildChipAdvice(squad, anomalies, captaincyCeiling, HORIZON);
 
       if (typeof liveFreeTransfers === 'number') {
         setFreeTransfers(liveFreeTransfers);
@@ -84,15 +85,16 @@ export default function App() {
         captain,
         viceCaptain,
         transferSuggestions,
+        chipAdvice,
         bank,
         isLive,
-        liveError: !isLive && myTeam.code !== 'NO_CREDENTIALS' ? myTeam.error : null,
       });
       setStatus('ready');
     } catch (err) {
       setError(err.message || 'Something went wrong loading your team.');
       setStatus('error');
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -119,7 +121,7 @@ export default function App() {
     return (
       <div className="state-wrap">
         <div className="spinner" />
-        Pulling your squad and fixture data…
+        Pulling your squad, fixtures, and underlying stats…
       </div>
     );
   }
@@ -181,18 +183,28 @@ export default function App() {
       <div className="section">
         <div className="section-head">
           <h2 className="section-title">Transfer Suggestions</h2>
+          <span className="section-note">next {HORIZON} GWs</span>
         </div>
-        <TransferSuggestions suggestions={data.transferSuggestions} freeTransfers={freeTransfers} />
+        <TransferSuggestions suggestions={data.transferSuggestions} />
+      </div>
+
+      <div className="section">
+        <div className="section-head">
+          <h2 className="section-title">Chip Strategy</h2>
+        </div>
+        <ChipAdvisor advice={data.chipAdvice} />
       </div>
 
       <div className="footer-note">
-        Projections blend each player's FPL expected points with their next fixture's difficulty
-        and injury/suspension status.{' '}
+        Projections are built from scratch off underlying stats — xG/xA per 90, bonus-point
+        history, and clean-sheet probability derived from each team's attack/defence ratings —
+        rather than FPL's own point estimate, then projected across the next {HORIZON}{' '}
+        gameweeks to weigh fixture swings, doubles, and blanks.{' '}
         {data.isLive
-          ? "Sell prices and bank are pulled live from your FPL account, so transfer budgets are exact."
-          : 'Sell prices are approximated from current market value — your actual sell price may be slightly lower if a player has risen in price since you bought them. Set FPL_EMAIL / FPL_PASSWORD in Vercel to pull exact prices instead.'}{' '}
-        This is a planning aid, not a guarantee — always sanity-check flagged players before the
-        deadline.
+          ? 'Sell prices and bank are pulled live from your FPL account.'
+          : "Sell prices are approximated from current market value — set FPL_EMAIL / FPL_PASSWORD in Vercel to pull your account's exact numbers instead."}{' '}
+        This is a planning aid built on public data, not a guarantee — always sanity-check
+        flagged players and confirmed lineups before the deadline.
       </div>
     </>
   );

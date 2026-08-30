@@ -458,6 +458,71 @@ button {
   line-height: 1.5;
 }
 
+.transfer-plan-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--chalk-dim);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.hit-badge {
+  background: rgba(209, 89, 74, 0.15);
+  color: var(--red);
+  border-radius: 3px;
+  padding: 2px 6px;
+  font-size: 10px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+/* ---------- Chip advisor ---------- */
+
+.chip-card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px 16px;
+  margin-bottom: 10px;
+}
+
+.chip-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.chip-icon {
+  font-size: 16px;
+}
+
+.chip-name {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 15px;
+  color: var(--amber);
+}
+
+.chip-gw {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--chalk-dim);
+  background: var(--surface-raised);
+  padding: 2px 7px;
+  border-radius: 3px;
+  margin-left: auto;
+}
+
+.chip-reason {
+  font-size: 13px;
+  color: var(--chalk-dim);
+  line-height: 1.5;
+  margin-top: 8px;
+}
+
 /* ---------- Controls / footer ---------- */
 
 .controls-row {
