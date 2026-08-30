@@ -228,9 +228,10 @@ export default function App() {
       </div>
 
       <div className="footer-note">
-        Projections are built from scratch off underlying stats — xG/xA per 90, bonus-point
-        history, and clean-sheet probability derived from each team's attack/defence ratings —
-        rather than FPL's own point estimate, then projected across the next {HORIZON}{' '}
+        Projections are built from scratch off underlying stats — xG/xA per 90, defensive-
+        contribution points, bonus-point history, and clean-sheet probability derived from each
+        team's attack/defence ratings — rather than FPL's own point estimate, then projected
+        across the next {HORIZON}{' '}
         gameweeks to weigh fixture swings, doubles, and blanks. Early in a season, when this
         year's own team ratings and player samples are still thin, projections also draw on
         FPL's official fixture difficulty ratings and last season's team and player data as a
