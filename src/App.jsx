@@ -15,7 +15,12 @@ import {
   suggestTransfers,
 } from './lib/optimizer.js';
 import { scanFixtureAnomalies, buildChipAdvice } from './lib/chipAdvisor.js';
-import { deriveSeasons, fetchLastSeasonTeamStrength, fetchLastSeasonPlayerRates } from './lib/externalData.js';
+import {
+  deriveSeasons,
+  fetchLastSeasonTeamStrength,
+  fetchLastSeasonPlayerRates,
+  fetchCurrentSeasonGameLogs,
+} from './lib/externalData.js';
 
 const STORAGE_KEY = 'fpl_team_id';
 const HORIZON = 6;
@@ -51,12 +56,19 @@ export default function App() {
       // team strength yet and every player's own sample is still tiny — see
       // lib/externalData.js. Best-effort: resolves to {} on any failure, so
       // a slow/unreachable GitHub never blocks loading the team.
+      // Current-season per-gameweek game logs (lib/externalData.js) add a
+      // "next layer" of context on top of the projection itself: set-piece
+      // duty, recent-form trend, and a flag for a season average that's
+      // secretly one big outlier game — see lib/formSignals.js. Same
+      // best-effort contract as the other two fetches.
       const seasons = deriveSeasons(bootstrap);
-      const [picksResp, lastSeasonTeamStrengthByCode, lastSeasonPlayerRatesByCode] = await Promise.all([
-        getEntryPicks(id, currentEvent.id),
-        fetchLastSeasonTeamStrength(seasons.previous),
-        fetchLastSeasonPlayerRates(seasons.previous),
-      ]);
+      const [picksResp, lastSeasonTeamStrengthByCode, lastSeasonPlayerRatesByCode, gameLogsByElement] =
+        await Promise.all([
+          getEntryPicks(id, currentEvent.id),
+          fetchLastSeasonTeamStrength(seasons.previous),
+          fetchLastSeasonPlayerRates(seasons.previous),
+          fetchCurrentSeasonGameLogs(seasons.current),
+        ]);
       const elementsById = Object.fromEntries(bootstrap.elements.map((e) => [e.id, e]));
 
       const ctx = buildProjectionContext(
@@ -65,7 +77,8 @@ export default function App() {
         nextEvent.id,
         HORIZON,
         lastSeasonTeamStrengthByCode,
-        lastSeasonPlayerRatesByCode
+        lastSeasonPlayerRatesByCode,
+        gameLogsByElement
       );
 
       // Try to get exact sell prices / bank / free-transfer count from the
@@ -221,7 +234,9 @@ export default function App() {
         gameweeks to weigh fixture swings, doubles, and blanks. Early in a season, when this
         year's own team ratings and player samples are still thin, projections also draw on
         FPL's official fixture difficulty ratings and last season's team and player data as a
-        prior — both fade out automatically as this season's own numbers fill in.{' '}
+        prior — both fade out automatically as this season's own numbers fill in. Set-piece
+        duty, recent-form trend, and single-game-outlier flags are shown alongside players as
+        extra context — they don't change any score or ranking, just what you see next to it.{' '}
         {data.isLive
           ? 'Sell prices and bank are pulled live from your FPL account.'
           : "Sell prices are approximated from current market value — set FPL_EMAIL / FPL_PASSWORD in Vercel to pull your account's exact numbers instead."}{' '}
