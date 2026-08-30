@@ -11,11 +11,15 @@ const ASSIST_PTS = 3;
 
 /** League-average attack/defence strength, used to normalize fixture difficulty. */
 export function buildLeagueAverages(teams) {
+  const FALLBACK_STRENGTH = 1100; // reasonable mid-table default if a team is missing a field
+  const safe = (v) => (Number.isFinite(v) ? v : FALLBACK_STRENGTH);
   const n = teams.length || 1;
   const avg = (fn) => teams.reduce((s, t) => s + fn(t), 0) / n;
+  const attack = avg((t) => (safe(t.strength_attack_home) + safe(t.strength_attack_away)) / 2);
+  const defence = avg((t) => (safe(t.strength_defence_home) + safe(t.strength_defence_away)) / 2);
   return {
-    attack: avg((t) => (t.strength_attack_home + t.strength_attack_away) / 2),
-    defence: avg((t) => (t.strength_defence_home + t.strength_defence_away) / 2),
+    attack: Number.isFinite(attack) ? attack : FALLBACK_STRENGTH,
+    defence: Number.isFinite(defence) ? defence : FALLBACK_STRENGTH,
   };
 }
 
@@ -76,9 +80,11 @@ function projectFixture(el, fixture, teamsById, leagueAvg, avgMinsPerGame) {
   const ownTeam = teamsById[el.team];
   if (!oppTeam || !ownTeam) return { pts: 0, csProb: 0 };
 
-  const oppDefence = fixture.isHome ? oppTeam.strength_defence_away : oppTeam.strength_defence_home;
-  const oppAttack = fixture.isHome ? oppTeam.strength_attack_away : oppTeam.strength_attack_home;
-  const ownDefence = fixture.isHome ? ownTeam.strength_defence_home : ownTeam.strength_defence_away;
+  const s = (v) => (Number.isFinite(v) ? v : null); // null -> falls through to league-average fallback below
+
+  const oppDefence = s(fixture.isHome ? oppTeam.strength_defence_away : oppTeam.strength_defence_home) ?? leagueAvg.defence;
+  const oppAttack = s(fixture.isHome ? oppTeam.strength_attack_away : oppTeam.strength_attack_home) ?? leagueAvg.attack;
+  const ownDefence = s(fixture.isHome ? ownTeam.strength_defence_home : ownTeam.strength_defence_away) ?? leagueAvg.defence;
 
   const attackAdj = clamp(leagueAvg.defence / (oppDefence || leagueAvg.defence), 0.7, 1.4);
   const csDifficulty = clamp(
@@ -123,8 +129,10 @@ function clamp(v, min, max) {
  */
 export function projectPlayer(el, fixturesByTeamEvent, fromEvent, gamesPlayed, teamsById, leagueAvg, horizon = 6) {
   const availability = computeAvailability(el);
-  const avgMinsPerGame = gamesPlayed > 0 ? el.minutes / gamesPlayed : (availability || 0) * 75;
-  el = { ...el, bonusPerGame: gamesPlayed > 0 ? el.bonus / gamesPlayed : 0 };
+  const minutesTotal = num(el.minutes);
+  const bonusTotal = num(el.bonus);
+  const avgMinsPerGame = gamesPlayed > 0 ? minutesTotal / gamesPlayed : (availability || 0) * 75;
+  el = { ...el, bonusPerGame: gamesPlayed > 0 ? bonusTotal / gamesPlayed : 0 };
 
   const teamFixtures = fixturesByTeamEvent[el.team] || {};
   const weights = [1, 0.6, 0.42, 0.3, 0.22, 0.16, 0.12, 0.09];
@@ -154,13 +162,18 @@ export function projectPlayer(el, fixturesByTeamEvent, fromEvent, gamesPlayed, t
   }
 
   return {
-    score: Math.round(nextEventPts * 100) / 100,
-    horizonScore: Math.round(horizonScore * 100) / 100,
+    score: safeNum(Math.round(nextEventPts * 100) / 100),
+    horizonScore: safeNum(Math.round(horizonScore * 100) / 100),
     isDoubleNext: nextFixtures.length >= 2,
     isBlankNext: nextFixtures.length === 0,
     availability,
     hasFlag: el.status !== 'a',
     statusLabel: statusLabel(el),
-    perEvent,
+    perEvent: perEvent.map((e) => ({ ...e, pts: safeNum(e.pts) })),
   };
+}
+
+/** Final safety net: never let a NaN/Infinity escape into the UI, whatever upstream data looks like. */
+function safeNum(v) {
+  return Number.isFinite(v) ? v : 0;
 }

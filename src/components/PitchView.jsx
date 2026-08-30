@@ -60,7 +60,9 @@ export default function PitchView({ starters, captain, viceCaptain }) {
                 {isVice && !isCap && <span className="armband" style={{ background: '#93a49b', color: '#0d1512' }}>V</span>}
               </div>
               <div className="pitch-player-name">{p.webName}</div>
-              <div className="pitch-player-meta">{p.score.toFixed(1)} pts · {p.teamShort} v {p.oppShort}</div>
+              <div className="pitch-player-meta">
+                {Number.isFinite(p.score) ? p.score.toFixed(1) : '—'} pts · {p.teamShort} v {p.oppShort}
+              </div>
             </div>
           );
         })}

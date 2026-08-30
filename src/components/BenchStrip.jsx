@@ -5,7 +5,7 @@ export default function BenchStrip({ bench }) {
         <div className="bench-card" key={p.element}>
           <div className="num">{i === 0 ? 'GK' : `SUB ${i}`}</div>
           <div className="name">{p.webName}</div>
-          <div className="score">{p.score.toFixed(1)} pts</div>
+          <div className="score">{Number.isFinite(p.score) ? p.score.toFixed(1) : '—'} pts</div>
         </div>
       ))}
     </div>
