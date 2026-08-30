@@ -1,4 +1,5 @@
 import { computeFormationLayout } from '../lib/formation.js';
+import SignalTags from './SignalTags.jsx';
 
 function PitchBackground() {
   return (
@@ -63,6 +64,7 @@ export default function PitchView({ starters, captain, viceCaptain }) {
               <div className="pitch-player-meta">
                 {Number.isFinite(p.score) ? p.score.toFixed(1) : '—'} pts · {p.teamShort} v {p.oppShort}
               </div>
+              <SignalTags player={p} />
             </div>
           );
         })}
