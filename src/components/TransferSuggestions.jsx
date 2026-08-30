@@ -9,7 +9,7 @@ function reasonForLeg(leg) {
   if (leg.out.isBlankNext) {
     return `${leg.out.webName} has no fixture next gameweek`;
   }
-  return `${leg.out.webName} projects lowest of the pair over the next few gameweeks`;
+  return `${leg.out.webName} projects lowest among this squad's weak links over the next few gameweeks`;
 }
 
 export default function TransferSuggestions({ suggestions }) {
@@ -28,7 +28,8 @@ export default function TransferSuggestions({ suggestions }) {
       {suggestions.map((sug, i) => (
         <div className="transfer-card" key={i}>
           <div className="transfer-plan-label">
-            {sug.transferCount === 1 ? 'Single transfer' : 'Double transfer'}
+            {{ 1: 'Single transfer', 2: 'Double transfer', 3: 'Triple transfer' }[sug.transferCount] ||
+              `${sug.transferCount}-player transfer`}
             {sug.hitCost > 0 && <span className="hit-badge">−{sug.hitCost} hit</span>}
           </div>
 
