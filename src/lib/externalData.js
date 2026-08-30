@@ -152,3 +152,45 @@ export async function fetchLastSeasonPlayerRates(previousSeason) {
   }
 }
 
+/**
+ * This season's per-gameweek game log for every player who's played a
+ * minute, from the same community mirror as the two fetches above —
+ * `gws/merged_gw.csv` is one row per player per gameweek and gets updated
+ * after every round. Keyed by `element`, which (unlike `code` above) is
+ * safe to match directly against this season's own bootstrap element ids,
+ * since both come from the same season.
+ *
+ * This is what makes it possible to look at recent form and game-to-game
+ * variance instead of a single season-to-date average — see
+ * lib/formSignals.js. A player's season aggregate can look identical
+ * whether it came from six steady games or one huge outlier and five
+ * blanks; this is the data needed to tell those two apart.
+ */
+export async function fetchCurrentSeasonGameLogs(currentSeason) {
+  try {
+    const res = await fetch(`${REPO_BASE}/${currentSeason}/gws/merged_gw.csv`);
+    if (!res.ok) return {};
+    const rows = rowsToObjects(parseCsv(await res.text()));
+    const byElement = {};
+    for (const r of rows) {
+      const element = num(r.element);
+      const round = num(r.round);
+      if (element == null || round == null) continue;
+      const expectedGoals = num(r.expected_goals) ?? 0;
+      const expectedAssists = num(r.expected_assists) ?? 0;
+      const entry = {
+        round,
+        minutes: num(r.minutes) ?? 0,
+        starts: num(r.starts) ?? 0,
+        expectedGoalInvolvements: num(r.expected_goal_involvements) ?? expectedGoals + expectedAssists,
+        bonus: num(r.bonus) ?? 0,
+        totalPoints: num(r.total_points) ?? 0,
+      };
+      (byElement[element] = byElement[element] || []).push(entry);
+    }
+    for (const gameLog of Object.values(byElement)) gameLog.sort((a, b) => a.round - b.round);
+    return byElement;
+  } catch {
+    return {};
+  }
+}
