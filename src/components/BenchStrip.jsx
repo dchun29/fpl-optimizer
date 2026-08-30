@@ -1,3 +1,5 @@
+import SignalTags from './SignalTags.jsx';
+
 export default function BenchStrip({ bench }) {
   return (
     <div className="bench-strip">
@@ -6,6 +8,7 @@ export default function BenchStrip({ bench }) {
           <div className="num">{i === 0 ? 'GK' : `SUB ${i}`}</div>
           <div className="name">{p.webName}</div>
           <div className="score">{Number.isFinite(p.score) ? p.score.toFixed(1) : '—'} pts</div>
+          <SignalTags player={p} />
         </div>
       ))}
     </div>
