@@ -5,6 +5,7 @@ import {
   buildGamesPlayedByTeam,
   horizonWeightSum,
 } from './projections.js';
+import { deriveSetPieceRoles, computeRecentForm, computeOutlierFlag } from './formSignals.js';
 
 export const POS_LABEL = { 1: 'GKP', 2: 'DEF', 3: 'MID', 4: 'FWD' };
 
@@ -45,7 +46,8 @@ export function buildProjectionContext(
   fromEventId,
   horizon = 6,
   lastSeasonTeamStrengthByCode = {},
-  lastSeasonPlayerRatesByCode = {}
+  lastSeasonPlayerRatesByCode = {},
+  gameLogsByElement = {}
 ) {
   return {
     fixturesByTeamEvent: buildFixturesByTeamEvent(fixtures),
@@ -56,6 +58,22 @@ export function buildProjectionContext(
     horizon,
     lastSeasonTeamStrengthByCode,
     lastSeasonPlayerRatesByCode,
+    gameLogsByElement,
+  };
+}
+
+/**
+ * The three "next layer" display signals (set-piece duty, recent-form
+ * window, single-game outlier flag) for one player — see lib/formSignals.js
+ * for what each means and why. These are purely informational: nothing
+ * here feeds into score, horizonScore, or stableScore, so they never change
+ * a ranking, only what's shown alongside it.
+ */
+function attachFormSignals(el, ctx) {
+  return {
+    setPieceRoles: deriveSetPieceRoles(el),
+    recentForm: computeRecentForm(ctx.gameLogsByElement[el.id]),
+    outlierFlag: computeOutlierFlag(ctx.gameLogsByElement[el.id]),
   };
 }
 
@@ -106,6 +124,7 @@ export function buildScoredSquad(picks, elementsById, ctx, sellPriceById = {}) {
       oppShort: opp ? opp.short_name : nextFixtures === 0 ? 'BLANK' : '—',
       wasOriginalCaptain: !!pick.is_captain,
       ...projection,
+      ...attachFormSignals(el, ctx),
       stableScore: Math.round(stableScore * 100) / 100,
     };
   });
@@ -175,6 +194,7 @@ function toCandidate(el, ctx, teamsById) {
     teamShort: teamsById[el.team]?.short_name ?? '',
     nowCost: el.now_cost,
     ...projection,
+    ...attachFormSignals(el, ctx),
   };
 }
 
