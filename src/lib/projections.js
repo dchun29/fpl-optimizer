@@ -9,6 +9,15 @@ const GOAL_PTS = { 1: 10, 2: 6, 3: 5, 4: 4 };
 const CS_PTS = { 1: 4, 2: 4, 3: 1, 4: 0 };
 const ASSIST_PTS = 3;
 
+// Points for clearing FPL's per-match "defensive contribution" threshold —
+// 2 pts to a defender with 10+ combined clearances/blocks/interceptions/
+// tackles in that match, or a midfielder/forward with 12+ (the same four
+// plus recoveries). FPL's own defensive_contribution_per_90 field already
+// applies the right combination of actions for each position, so this only
+// needs the position threshold — goalkeepers don't take part in the rule.
+const DC_THRESHOLD = { 2: 10, 3: 12, 4: 12 };
+const DC_PTS = 2;
+
 // How much each gameweek in the horizon counts toward horizonScore — this
 // week fully, then decaying (next-week fixtures/form matter far more than
 // week 6's). Shared by projectPlayer and horizonWeightSum so the two never
@@ -198,8 +207,25 @@ function projectFixture(el, fixture, teamsById, leagueAvg, avgMinsPerGame, lastS
   const bonusPerGame = num(el.bonusPerGame);
   const bonusComponent = bonusPerGame * blendFactor;
 
-  const pts = Math.max(0, appearancePts + attackPts + csComponent + concededPenalty + bonusComponent);
-  return { pts, csProb, attackPts, csComponent, bonusComponent, appearancePts };
+  // Real defensive-contribution points are all-or-nothing per match (2 pts
+  // if that game's action count clears the threshold, 0 if not), but only a
+  // season-long average rate is available here — so the chance of clearing
+  // the threshold in any one match is modeled as a logistic curve centered
+  // on the threshold itself: a player averaging exactly the threshold is
+  // roughly a coin flip each game, comfortably above it a near-lock, and
+  // well below it a long shot rather than a flat zero (some games run
+  // hotter than a player's average). Scaled by minsFactor since a
+  // part-game appearance rarely racks up a full match's worth of actions.
+  const dcThreshold = DC_THRESHOLD[pos];
+  const dc90 = num(el.defensive_contribution_per_90);
+  const dcProb = dcThreshold ? 1 / (1 + Math.exp(-(dc90 - dcThreshold) / (dcThreshold * 0.35))) : 0;
+  const defContribComponent = DC_PTS * dcProb * minsFactor;
+
+  const pts = Math.max(
+    0,
+    appearancePts + attackPts + csComponent + concededPenalty + bonusComponent + defContribComponent
+  );
+  return { pts, csProb, attackPts, csComponent, bonusComponent, appearancePts, defContribComponent };
 }
 
 function clamp(v, min, max) {
@@ -247,18 +273,21 @@ export function projectPlayer(
   const gamesPlayed = gamesPlayedByTeam[el.team] || 0;
   const avgMinsPerGame = gamesPlayed > 0 ? minutesTotal / gamesPlayed : (availability || 0) * 75;
 
-  // Shrink this season's own (possibly tiny-sample) xG/xA per-90 toward last
-  // season's rate for the same player (by stable cross-season `code`), so
-  // early-season projections aren't whipsawed by one big or blank game.
+  // Shrink this season's own (possibly tiny-sample) xG/xA/defensive-
+  // contribution per-90 toward last season's rate for the same player (by
+  // stable cross-season `code`), so early-season projections aren't
+  // whipsawed by one big or blank game.
   const priorRates = lastSeasonPlayerRatesByCode[el.code];
   const shrunkXG90 = shrink(num(el.expected_goals_per_90), minutesTotal, priorRates?.xG90);
   const shrunkXA90 = shrink(num(el.expected_assists_per_90), minutesTotal, priorRates?.xA90);
+  const shrunkDC90 = shrink(num(el.defensive_contribution_per_90), minutesTotal, priorRates?.dc90);
 
   el = {
     ...el,
     bonusPerGame: gamesPlayed > 0 ? bonusTotal / gamesPlayed : 0,
     expected_goals_per_90: shrunkXG90,
     expected_assists_per_90: shrunkXA90,
+    defensive_contribution_per_90: shrunkDC90,
   };
 
   const teamFixtures = fixturesByTeamEvent[el.team] || {};
