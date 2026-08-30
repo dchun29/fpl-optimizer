@@ -12,6 +12,9 @@ const ASSIST_PTS = 3;
 /** League-average attack/defence strength, used to normalize fixture difficulty. */
 export function buildLeagueAverages(teams) {
   const FALLBACK_STRENGTH = 1100; // reasonable mid-table default if a team is missing a field
+  // Early in a season (or whenever FPL hasn't computed difficulty yet) these
+  // fields come back as 0 rather than omitted/null. Treat non-positive the
+  // same as missing so we don't average in a bunch of zeros.
   const safe = (v) => (Number.isFinite(v) && v > 0 ? v : FALLBACK_STRENGTH);
   const n = teams.length || 1;
   const avg = (fn) => teams.reduce((s, t) => s + fn(t), 0) / n;
@@ -50,6 +53,28 @@ export function countFinishedEvents(events) {
   return events.filter((e) => e.finished).length;
 }
 
+/**
+ * Per-team count of fixtures already played on the pitch (finished, or
+ * provisionally finished pending bonus-point confirmation) — not just
+ * fixtures FPL has fully confirmed. A single gameweek's ten fixtures are
+ * often spread across three or four days, so at any given moment some
+ * teams have already played their fixture for the current gameweek while
+ * others haven't. Averaging a player's season-to-date minutes/bonus by a
+ * single league-wide "games played" number silently doubles the rate for
+ * anyone whose team already played, since their season-to-date total
+ * already includes that game.
+ */
+export function buildGamesPlayedByTeam(fixtures) {
+  const map = {};
+  for (const f of fixtures) {
+    if (f.event == null) continue;
+    if (!f.finished && !f.finished_provisional) continue;
+    map[f.team_h] = (map[f.team_h] || 0) + 1;
+    map[f.team_a] = (map[f.team_a] || 0) + 1;
+  }
+  return map;
+}
+
 function computeAvailability(el) {
   if (el.status === 'a') {
     return el.chance_of_playing_next_round == null ? 1 : el.chance_of_playing_next_round / 100;
@@ -80,7 +105,9 @@ function projectFixture(el, fixture, teamsById, leagueAvg, avgMinsPerGame) {
   const ownTeam = teamsById[el.team];
   if (!oppTeam || !ownTeam) return { pts: 0, csProb: 0 };
 
-  const s = (v) => (Number.isFinite(v) && v > 0 ? v : null); // null -> falls through to league-average fallback below
+  // Non-positive is FPL's "not computed yet" sentinel, same as missing — fall
+  // through to the league-average fallback below rather than dividing by 0.
+  const s = (v) => (Number.isFinite(v) && v > 0 ? v : null);
 
   const oppDefence = s(fixture.isHome ? oppTeam.strength_defence_away : oppTeam.strength_defence_home) ?? leagueAvg.defence;
   const oppAttack = s(fixture.isHome ? oppTeam.strength_attack_away : oppTeam.strength_attack_home) ?? leagueAvg.attack;
@@ -127,10 +154,14 @@ function clamp(v, min, max) {
  * plus a decay-weighted score across the horizon for transfer/chip
  * decisions, plus a breakdown for the top-contributing factor.
  */
-export function projectPlayer(el, fixturesByTeamEvent, fromEvent, gamesPlayed, teamsById, leagueAvg, horizon = 6) {
+export function projectPlayer(el, fixturesByTeamEvent, fromEvent, gamesPlayedByTeam, teamsById, leagueAvg, horizon = 6) {
   const availability = computeAvailability(el);
   const minutesTotal = num(el.minutes);
   const bonusTotal = num(el.bonus);
+  // Use this player's own team's games-played count, not a single league-wide
+  // number — mid-gameweek, some teams have already played their fixture and
+  // some haven't (see buildGamesPlayedByTeam).
+  const gamesPlayed = gamesPlayedByTeam[el.team] || 0;
   const avgMinsPerGame = gamesPlayed > 0 ? minutesTotal / gamesPlayed : (availability || 0) * 75;
   el = { ...el, bonusPerGame: gamesPlayed > 0 ? bonusTotal / gamesPlayed : 0 };
 
