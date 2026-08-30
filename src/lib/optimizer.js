@@ -1,6 +1,20 @@
-import { projectPlayer, buildLeagueAverages, buildFixturesByTeamEvent, buildGamesPlayedByTeam } from './projections.js';
+import {
+  projectPlayer,
+  buildLeagueAverages,
+  buildFixturesByTeamEvent,
+  buildGamesPlayedByTeam,
+  horizonWeightSum,
+} from './projections.js';
 
 export const POS_LABEL = { 1: 'GKP', 2: 'DEF', 3: 'MID', 4: 'FWD' };
+
+// Lineup/captain decisions blend this week's projection with the 6-week
+// outlook, so a one-off spike (or dip) doesn't flip your XI and armband
+// every week — this is how much weight the multi-week outlook gets.
+// 0 = pick purely on next week's score; 1 = pick purely on the 6-week
+// average, ignoring next week's fixture entirely. Transfer suggestions are
+// unaffected by this — they already run on the full horizon.
+const LINEUP_STABILITY_WEIGHT = 0.3;
 
 const VALID_FORMATIONS = (() => {
   const out = [];
@@ -14,7 +28,7 @@ const VALID_FORMATIONS = (() => {
 })();
 
 function sum(arr) {
-  return arr.reduce((s, p) => s + p.score, 0);
+  return arr.reduce((s, p) => s + p.stableScore, 0);
 }
 
 /** Bundles the per-team/per-gameweek context the projection engine needs, computed once per load. */
@@ -48,6 +62,7 @@ function scoreElement(el, ctx) {
  * their current market price.
  */
 export function buildScoredSquad(picks, elementsById, ctx, sellPriceById = {}) {
+  const weightSum = horizonWeightSum(ctx.horizon);
   return picks.map((pick) => {
     const el = elementsById[pick.element];
     const projection = scoreElement(el, ctx);
@@ -55,6 +70,11 @@ export function buildScoredSquad(picks, elementsById, ctx, sellPriceById = {}) {
     const nextOppId = ctx.fixturesByTeamEvent[el.team]?.[ctx.fromEventId]?.[0]?.oppId;
     const opp = nextOppId ? ctx.teamsById[nextOppId] : null;
     const hasLiveSellPrice = Object.prototype.hasOwnProperty.call(sellPriceById, el.id);
+    // horizonScore is a decay-weighted *sum* across 6 gameweeks, so it's not
+    // directly comparable to next-week's `score`. Divide back down to a
+    // weighted-average points-per-gameweek figure first, then blend.
+    const horizonAvg = projection.horizonScore / weightSum;
+    const stableScore = projection.score * (1 - LINEUP_STABILITY_WEIGHT) + horizonAvg * LINEUP_STABILITY_WEIGHT;
     return {
       element: el.id,
       webName: el.web_name,
@@ -68,15 +88,21 @@ export function buildScoredSquad(picks, elementsById, ctx, sellPriceById = {}) {
       oppShort: opp ? opp.short_name : nextFixtures === 0 ? 'BLANK' : '—',
       wasOriginalCaptain: !!pick.is_captain,
       ...projection,
+      stableScore: Math.round(stableScore * 100) / 100,
     };
   });
 }
 
-/** Picks the highest-scoring valid formation (3-5 DEF, 2-5 MID, 1-3 FWD) from a 15-man squad. */
+/**
+ * Picks the highest-scoring valid formation (3-5 DEF, 2-5 MID, 1-3 FWD) from
+ * a 15-man squad. Ranked by `stableScore` (next week blended with the
+ * 6-week outlook, see LINEUP_STABILITY_WEIGHT) rather than pure next-week
+ * score, so the XI doesn't swing wildly on a single volatile gameweek.
+ */
 export function selectBestXI(squad) {
   const byPos = { 1: [], 2: [], 3: [], 4: [] };
   for (const p of squad) byPos[p.elementType].push(p);
-  for (const k in byPos) byPos[k].sort((a, b) => b.score - a.score);
+  for (const k in byPos) byPos[k].sort((a, b) => b.stableScore - a.stableScore);
 
   const gk = byPos[1][0];
   const benchGk = byPos[1][1];
@@ -87,7 +113,7 @@ export function selectBestXI(squad) {
     const defs = byPos[2].slice(0, d);
     const mids = byPos[3].slice(0, m);
     const fwds = byPos[4].slice(0, f);
-    const total = gk.score + sum(defs) + sum(mids) + sum(fwds);
+    const total = gk.stableScore + sum(defs) + sum(mids) + sum(fwds);
     if (!best || total > best.total) {
       best = { total, formation: `${d}-${m}-${f}`, defs, mids, fwds };
     }
@@ -97,13 +123,14 @@ export function selectBestXI(squad) {
   const starterIds = new Set(starters.map((p) => p.element));
   const benchOutfield = squad
     .filter((p) => !starterIds.has(p.element) && p.elementType !== 1)
-    .sort((a, b) => b.score - a.score);
+    .sort((a, b) => b.stableScore - a.stableScore);
 
   return { starters, bench: [benchGk, ...benchOutfield], formation: best.formation };
 }
 
+/** Captain/vice pick, also ranked by stableScore for the same reason as the XI. */
 export function pickCaptains(starters) {
-  const sorted = [...starters].sort((a, b) => b.score - a.score);
+  const sorted = [...starters].sort((a, b) => b.stableScore - a.stableScore);
   return { captain: sorted[0], viceCaptain: sorted[1] };
 }
 
