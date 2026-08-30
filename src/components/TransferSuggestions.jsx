@@ -1,3 +1,5 @@
+import SignalTags from './SignalTags.jsx';
+
 function fmtCost(tenths) {
   return `£${(tenths / 10).toFixed(1)}m`;
 }
@@ -10,6 +12,18 @@ function reasonForLeg(leg) {
     return `${leg.out.webName} has no fixture next gameweek`;
   }
   return `${leg.out.webName} projects lowest among this squad's weak links over the next few gameweeks`;
+}
+
+/**
+ * A separate, visually distinct caution line for an incoming player whose
+ * season total is mostly one game (see lib/formSignals.js) — the exact
+ * pattern behind a pick looking better in the projection than it turns out
+ * to be. This doesn't change whether the transfer is suggested, just flags
+ * it for a second look before you act on it.
+ */
+function cautionForLeg(leg) {
+  if (!leg.in.outlierFlag) return null;
+  return `${leg.in.webName}'s underlying output is ${leg.in.outlierFlag.sharePct}% from a single game (GW${leg.in.outlierFlag.round}) — worth a second look before committing.`;
 }
 
 export default function TransferSuggestions({ suggestions }) {
@@ -41,6 +55,7 @@ export default function TransferSuggestions({ suggestions }) {
                 <div className="psub">
                   {leg.out.teamShort} · {fmtCost(leg.out.sellPrice)}
                 </div>
+                <SignalTags player={leg.out} />
               </div>
               <div className="transfer-arrow">→</div>
               <div className="transfer-side in">
@@ -49,6 +64,7 @@ export default function TransferSuggestions({ suggestions }) {
                 <div className="psub">
                   {leg.in.teamShort} · {fmtCost(leg.in.nowCost)}
                 </div>
+                <SignalTags player={leg.in} />
               </div>
             </div>
           ))}
@@ -57,6 +73,12 @@ export default function TransferSuggestions({ suggestions }) {
             {sug.legs.map((l) => reasonForLeg(l)).join('. ')}. Replacements project higher over
             the next several gameweeks, not just next week.
           </div>
+
+          {sug.legs.filter((l) => l.in.outlierFlag).length > 0 && (
+            <div className="transfer-caution">
+              {sug.legs.map((l) => cautionForLeg(l)).filter(Boolean).join(' ')}
+            </div>
+          )}
 
           <div className="transfer-gain">
             +{sug.gain.toFixed(1)} pts over horizon
