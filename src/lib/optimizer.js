@@ -31,8 +31,22 @@ function sum(arr) {
   return arr.reduce((s, p) => s + p.stableScore, 0);
 }
 
-/** Bundles the per-team/per-gameweek context the projection engine needs, computed once per load. */
-export function buildProjectionContext(bootstrap, fixtures, fromEventId, horizon = 6) {
+/**
+ * Bundles the per-team/per-gameweek context the projection engine needs,
+ * computed once per load. `lastSeasonTeamStrengthByCode` and
+ * `lastSeasonPlayerRatesByCode` are optional supplementary signals (see
+ * lib/externalData.js) used as a prior/fallback early in a season when this
+ * season's own strength ratings and per-90 rates are still thin — omit them
+ * (they default to {}) and everything works exactly as before.
+ */
+export function buildProjectionContext(
+  bootstrap,
+  fixtures,
+  fromEventId,
+  horizon = 6,
+  lastSeasonTeamStrengthByCode = {},
+  lastSeasonPlayerRatesByCode = {}
+) {
   return {
     fixturesByTeamEvent: buildFixturesByTeamEvent(fixtures),
     gamesPlayedByTeam: buildGamesPlayedByTeam(fixtures),
@@ -40,6 +54,8 @@ export function buildProjectionContext(bootstrap, fixtures, fromEventId, horizon
     leagueAvg: buildLeagueAverages(bootstrap.teams),
     fromEventId,
     horizon,
+    lastSeasonTeamStrengthByCode,
+    lastSeasonPlayerRatesByCode,
   };
 }
 
@@ -51,7 +67,9 @@ function scoreElement(el, ctx) {
     ctx.gamesPlayedByTeam,
     ctx.teamsById,
     ctx.leagueAvg,
-    ctx.horizon
+    ctx.horizon,
+    ctx.lastSeasonTeamStrengthByCode,
+    ctx.lastSeasonPlayerRatesByCode
   );
 }
 
@@ -162,10 +180,10 @@ function toCandidate(el, ctx, teamsById) {
 
 /**
  * Exhaustively checks every affordable same-position replacement for every
- * squad player (single transfers), then checks paired and tripled transfers
- * among the squad's weakest players against the best independent
- * replacements for each — so one-, two-, and three-transfer plans are all
- * genuinely searched, not just "swap the worst player."
+ * squad player (single transfers), then checks paired transfers among the
+ * squad's weakest players against the best independent replacements for
+ * each — so both one- and two-transfer plans are genuinely searched, not
+ * just "swap the worst player."
  */
 export function suggestTransfers(squad, allElements, ctx, bankTenths, freeTransfers = 1) {
   const squadIds = new Set(squad.map((p) => p.element));
