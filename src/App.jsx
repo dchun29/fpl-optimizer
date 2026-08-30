@@ -15,6 +15,7 @@ import {
   suggestTransfers,
 } from './lib/optimizer.js';
 import { scanFixtureAnomalies, buildChipAdvice } from './lib/chipAdvisor.js';
+import { deriveSeasons, fetchLastSeasonTeamStrength, fetchLastSeasonPlayerRates } from './lib/externalData.js';
 
 const STORAGE_KEY = 'fpl_team_id';
 const HORIZON = 6;
@@ -44,10 +45,28 @@ export default function App() {
         throw new Error('No completed gameweek found yet this season — check back once GW1 kicks off.');
       }
 
-      const picksResp = await getEntryPicks(id, currentEvent.id);
+      // Last season's team ratings and player xG/xA rates (from a public
+      // community mirror of FPL's own historical data) supplement this
+      // season's own numbers early on, when FPL hasn't populated granular
+      // team strength yet and every player's own sample is still tiny — see
+      // lib/externalData.js. Best-effort: resolves to {} on any failure, so
+      // a slow/unreachable GitHub never blocks loading the team.
+      const seasons = deriveSeasons(bootstrap);
+      const [picksResp, lastSeasonTeamStrengthByCode, lastSeasonPlayerRatesByCode] = await Promise.all([
+        getEntryPicks(id, currentEvent.id),
+        fetchLastSeasonTeamStrength(seasons.previous),
+        fetchLastSeasonPlayerRates(seasons.previous),
+      ]);
       const elementsById = Object.fromEntries(bootstrap.elements.map((e) => [e.id, e]));
 
-      const ctx = buildProjectionContext(bootstrap, fixtures, nextEvent.id, HORIZON);
+      const ctx = buildProjectionContext(
+        bootstrap,
+        fixtures,
+        nextEvent.id,
+        HORIZON,
+        lastSeasonTeamStrengthByCode,
+        lastSeasonPlayerRatesByCode
+      );
 
       // Try to get exact sell prices / bank / free-transfer count from the
       // authenticated my-team endpoint. Falls back cleanly if credentials
@@ -199,7 +218,10 @@ export default function App() {
         Projections are built from scratch off underlying stats — xG/xA per 90, bonus-point
         history, and clean-sheet probability derived from each team's attack/defence ratings —
         rather than FPL's own point estimate, then projected across the next {HORIZON}{' '}
-        gameweeks to weigh fixture swings, doubles, and blanks.{' '}
+        gameweeks to weigh fixture swings, doubles, and blanks. Early in a season, when this
+        year's own team ratings and player samples are still thin, projections also draw on
+        FPL's official fixture difficulty ratings and last season's team and player data as a
+        prior — both fade out automatically as this season's own numbers fill in.{' '}
         {data.isLive
           ? 'Sell prices and bank are pulled live from your FPL account.'
           : "Sell prices are approximated from current market value — set FPL_EMAIL / FPL_PASSWORD in Vercel to pull your account's exact numbers instead."}{' '}
