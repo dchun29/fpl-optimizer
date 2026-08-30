@@ -12,7 +12,7 @@ const ASSIST_PTS = 3;
 /** League-average attack/defence strength, used to normalize fixture difficulty. */
 export function buildLeagueAverages(teams) {
   const FALLBACK_STRENGTH = 1100; // reasonable mid-table default if a team is missing a field
-  const safe = (v) => (Number.isFinite(v) ? v : FALLBACK_STRENGTH);
+  const safe = (v) => (Number.isFinite(v) && v > 0 ? v : FALLBACK_STRENGTH);
   const n = teams.length || 1;
   const avg = (fn) => teams.reduce((s, t) => s + fn(t), 0) / n;
   const attack = avg((t) => (safe(t.strength_attack_home) + safe(t.strength_attack_away)) / 2);
@@ -80,7 +80,7 @@ function projectFixture(el, fixture, teamsById, leagueAvg, avgMinsPerGame) {
   const ownTeam = teamsById[el.team];
   if (!oppTeam || !ownTeam) return { pts: 0, csProb: 0 };
 
-  const s = (v) => (Number.isFinite(v) ? v : null); // null -> falls through to league-average fallback below
+  const s = (v) => (Number.isFinite(v) && v > 0 ? v : null); // null -> falls through to league-average fallback below
 
   const oppDefence = s(fixture.isHome ? oppTeam.strength_defence_away : oppTeam.strength_defence_home) ?? leagueAvg.defence;
   const oppAttack = s(fixture.isHome ? oppTeam.strength_attack_away : oppTeam.strength_attack_home) ?? leagueAvg.attack;
