@@ -27,6 +27,28 @@ export function horizonWeightSum(horizon) {
   return sum || 1;
 }
 
+/**
+ * Converts FPL's own official Fixture Difficulty Rating (1 = easiest, 5 =
+ * hardest, from the perspective of the team with this fixture) into a
+ * multiplier on that team's expected attacking output. FDR bakes in FPL's
+ * own analyst judgment of opponent strength, home/away, and current form —
+ * and critically, it stays populated even in gameweeks where the granular
+ * strength_* fields haven't been computed yet (see buildLeagueAverages),
+ * so it's blended in below as an independent signal rather than relying
+ * solely on strength ratios that can currently be a flat fallback for
+ * every fixture early in a season.
+ */
+export function fdrToAttackFactor(difficulty) {
+  const table = { 1: 1.25, 2: 1.1, 3: 1.0, 4: 0.85, 5: 0.7 };
+  return table[difficulty] ?? 1.0;
+}
+
+/** Same idea as fdrToAttackFactor, for clean-sheet/conceding difficulty. */
+export function fdrToDefenseFactor(difficulty) {
+  const table = { 1: 0.75, 2: 0.88, 3: 1.0, 4: 1.15, 5: 1.35 };
+  return table[difficulty] ?? 1.0;
+}
+
 /** League-average attack/defence strength, used to normalize fixture difficulty. */
 export function buildLeagueAverages(teams) {
   const FALLBACK_STRENGTH = 1100; // reasonable mid-table default if a team is missing a field
@@ -117,26 +139,44 @@ function num(v, fallback = 0) {
 }
 
 /** Projects one player's points for a single fixture. */
-function projectFixture(el, fixture, teamsById, leagueAvg, avgMinsPerGame) {
+function projectFixture(el, fixture, teamsById, leagueAvg, avgMinsPerGame, lastSeasonTeamStrengthByCode = {}) {
   const pos = el.element_type;
   const oppTeam = teamsById[fixture.oppId];
   const ownTeam = teamsById[el.team];
   if (!oppTeam || !ownTeam) return { pts: 0, csProb: 0 };
 
   // Non-positive is FPL's "not computed yet" sentinel, same as missing — fall
-  // through to the league-average fallback below rather than dividing by 0.
+  // through to last season's rating for the same team (by stable cross-season
+  // `code`), then the league-average fallback, rather than dividing by 0.
   const s = (v) => (Number.isFinite(v) && v > 0 ? v : null);
+  const oppLast = lastSeasonTeamStrengthByCode[oppTeam.code];
+  const ownLast = lastSeasonTeamStrengthByCode[ownTeam.code];
 
-  const oppDefence = s(fixture.isHome ? oppTeam.strength_defence_away : oppTeam.strength_defence_home) ?? leagueAvg.defence;
-  const oppAttack = s(fixture.isHome ? oppTeam.strength_attack_away : oppTeam.strength_attack_home) ?? leagueAvg.attack;
-  const ownDefence = s(fixture.isHome ? ownTeam.strength_defence_home : ownTeam.strength_defence_away) ?? leagueAvg.defence;
+  const oppDefence =
+    s(fixture.isHome ? oppTeam.strength_defence_away : oppTeam.strength_defence_home) ??
+    s(fixture.isHome ? oppLast?.defence_away : oppLast?.defence_home) ??
+    leagueAvg.defence;
+  const oppAttack =
+    s(fixture.isHome ? oppTeam.strength_attack_away : oppTeam.strength_attack_home) ??
+    s(fixture.isHome ? oppLast?.attack_away : oppLast?.attack_home) ??
+    leagueAvg.attack;
+  const ownDefence =
+    s(fixture.isHome ? ownTeam.strength_defence_home : ownTeam.strength_defence_away) ??
+    s(fixture.isHome ? ownLast?.defence_home : ownLast?.defence_away) ??
+    leagueAvg.defence;
 
-  const attackAdj = clamp(leagueAvg.defence / (oppDefence || leagueAvg.defence), 0.7, 1.4);
-  const csDifficulty = clamp(
+  const strengthAttackAdj = clamp(leagueAvg.defence / (oppDefence || leagueAvg.defence), 0.7, 1.4);
+  const strengthCsDifficulty = clamp(
     (oppAttack / leagueAvg.attack) * (leagueAvg.defence / (ownDefence || leagueAvg.defence)),
     0.5,
     2.2
   );
+
+  // Blend in FPL's own FDR alongside the strength-ratio estimate above —
+  // see fdrToAttackFactor/fdrToDefenseFactor for why this matters early in
+  // a season when strength_* is still flat for every team.
+  const attackAdj = clamp((strengthAttackAdj + fdrToAttackFactor(fixture.difficulty)) / 2, 0.6, 1.5);
+  const csDifficulty = clamp((strengthCsDifficulty + fdrToDefenseFactor(fixture.difficulty)) / 2, 0.5, 2.4);
   const csProb = clamp(0.3 / csDifficulty, 0.03, 0.65);
   const expConceded = clamp(1.35 * csDifficulty, 0.3, 3.2);
 
@@ -166,13 +206,38 @@ function clamp(v, min, max) {
   return Math.min(max, Math.max(min, v));
 }
 
+// How much weight last season's per-90 rate carries relative to this
+// season's own sample, expressed in minutes: at 0 minutes played this
+// season the projection leans entirely on the prior; by a couple of this
+// many minutes in, this season's own (increasingly reliable) sample
+// dominates. Keeps 1-2 gameweeks of noise from wildly over/understating a
+// player's real level before there's enough of a track record to trust.
+const PRIOR_MINUTES_WEIGHT = 300;
+
+/** Blends a current-season per-90 rate toward a prior, weighted down as current-season minutes accumulate. */
+function shrink(currentRate, currentMinutes, priorRate) {
+  if (priorRate == null) return currentRate;
+  const w = PRIOR_MINUTES_WEIGHT / (PRIOR_MINUTES_WEIGHT + Math.max(0, currentMinutes));
+  return currentRate * (1 - w) + priorRate * w;
+}
+
 /**
  * Full projection for one player: score for the immediate next event
  * (summed across both fixtures if it's a double, zero if it's a blank),
  * plus a decay-weighted score across the horizon for transfer/chip
  * decisions, plus a breakdown for the top-contributing factor.
  */
-export function projectPlayer(el, fixturesByTeamEvent, fromEvent, gamesPlayedByTeam, teamsById, leagueAvg, horizon = 6) {
+export function projectPlayer(
+  el,
+  fixturesByTeamEvent,
+  fromEvent,
+  gamesPlayedByTeam,
+  teamsById,
+  leagueAvg,
+  horizon = 6,
+  lastSeasonTeamStrengthByCode = {},
+  lastSeasonPlayerRatesByCode = {}
+) {
   const availability = computeAvailability(el);
   const minutesTotal = num(el.minutes);
   const bonusTotal = num(el.bonus);
@@ -181,7 +246,20 @@ export function projectPlayer(el, fixturesByTeamEvent, fromEvent, gamesPlayedByT
   // some haven't (see buildGamesPlayedByTeam).
   const gamesPlayed = gamesPlayedByTeam[el.team] || 0;
   const avgMinsPerGame = gamesPlayed > 0 ? minutesTotal / gamesPlayed : (availability || 0) * 75;
-  el = { ...el, bonusPerGame: gamesPlayed > 0 ? bonusTotal / gamesPlayed : 0 };
+
+  // Shrink this season's own (possibly tiny-sample) xG/xA per-90 toward last
+  // season's rate for the same player (by stable cross-season `code`), so
+  // early-season projections aren't whipsawed by one big or blank game.
+  const priorRates = lastSeasonPlayerRatesByCode[el.code];
+  const shrunkXG90 = shrink(num(el.expected_goals_per_90), minutesTotal, priorRates?.xG90);
+  const shrunkXA90 = shrink(num(el.expected_assists_per_90), minutesTotal, priorRates?.xA90);
+
+  el = {
+    ...el,
+    bonusPerGame: gamesPlayed > 0 ? bonusTotal / gamesPlayed : 0,
+    expected_goals_per_90: shrunkXG90,
+    expected_assists_per_90: shrunkXA90,
+  };
 
   const teamFixtures = fixturesByTeamEvent[el.team] || {};
   const weights = HORIZON_DECAY_WEIGHTS;
@@ -197,7 +275,7 @@ export function projectPlayer(el, fixturesByTeamEvent, fromEvent, gamesPlayedByT
     const fixturesThisEvent = teamFixtures[eventId] || [];
     let eventPts = 0;
     fixturesThisEvent.forEach((fx, idx) => {
-      const proj = projectFixture(el, fx, teamsById, leagueAvg, avgMinsPerGame);
+      const proj = projectFixture(el, fx, teamsById, leagueAvg, avgMinsPerGame, lastSeasonTeamStrengthByCode);
       const discount = idx === 0 ? 1 : 0.85; // slight rotation-risk discount on 2nd+ fixture in a double
       eventPts += proj.pts * discount;
       bestSingleFixturePts = Math.max(bestSingleFixturePts, proj.pts);
