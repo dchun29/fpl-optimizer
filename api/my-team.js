@@ -70,7 +70,11 @@ export default async function handler(req, res) {
     const data = await myTeamRes.json();
     res.setHeader('Cache-Control', 'no-store');
     return res.status(200).json(data);
-  } catch (err) {
-    return res.status(502).json({ error: `Login/fetch failed: ${err.message}` });
+   } catch (err) {
+    console.error('my-team fetch failed:', err);
+    return res.status(502).json({
+      error: `Login/fetch failed: ${err.message}`,
+      cause: err.cause ? String(err.cause) : null,
+    });
   }
 }
