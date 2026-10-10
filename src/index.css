@@ -609,6 +609,174 @@ button {
   font-size: 12px;
   text-decoration: underline;
   padding: 0;
+  cursor: pointer;
+}
+
+/* ---------- Squad overrides ---------- */
+
+.overrides-box {
+  margin: 16px 20px 0;
+  padding: 14px 16px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.overrides-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--chalk);
+}
+
+.overrides-empty {
+  font-size: 12.5px;
+  color: var(--chalk-dim);
+  line-height: 1.5;
+  margin-top: 8px;
+}
+
+.overrides-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.override-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--surface-raised);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 4px 6px 4px 10px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--chalk);
+}
+
+.chip-remove {
+  background: none;
+  border: none;
+  color: var(--chalk-dim);
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 4px;
+  cursor: pointer;
+}
+
+.chip-remove:hover {
+  color: var(--red);
+}
+
+.override-form {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.override-form select,
+.override-search input {
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  color: var(--chalk);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  padding: 9px 10px;
+  border-radius: 5px;
+}
+
+.override-form select:disabled,
+.override-search input:disabled {
+  opacity: 0.5;
+}
+
+.override-search {
+  position: relative;
+}
+
+.override-suggestions {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  background: var(--surface-raised);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+  z-index: 5;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.override-suggestion {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+  background: none;
+  border: none;
+  color: var(--chalk);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  padding: 9px 10px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.override-suggestion:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.override-suggestion .psub {
+  color: var(--chalk-dim);
+  font-size: 11px;
+}
+
+.override-add-btn {
+  align-self: flex-end;
+  background: var(--turf);
+  color: #06120a;
+  border: none;
+  font-weight: 700;
+  font-family: var(--font-display);
+  font-size: 13px;
+  padding: 8px 16px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.override-add-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.override-bank-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.override-bank-input {
+  width: 80px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  color: var(--chalk);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  padding: 6px 8px;
+  border-radius: 4px;
 }
 
 .footer-note {
