@@ -5,6 +5,7 @@ import PitchView from './components/PitchView.jsx';
 import BenchStrip from './components/BenchStrip.jsx';
 import TransferSuggestions from './components/TransferSuggestions.jsx';
 import ChipAdvisor from './components/ChipAdvisor.jsx';
+import SquadOverrides from './components/SquadOverrides.jsx';
 import { getBootstrap, getFixtures, getEntry, getEntryPicks, getMyTeam } from './lib/api.js';
 import {
   buildProjectionContext,
@@ -24,6 +25,45 @@ import {
 
 const STORAGE_KEY = 'fpl_team_id';
 const HORIZON = 6;
+
+// --- Manual squad-override + bank storage (see SquadOverrides.jsx) ---
+// FPL's public API only exposes a squad once its gameweek has locked, so any
+// transfer made since then is invisible to it. Rather than depend on FPL's
+// (now broken — see api/my-team.js) authenticated login to see live squad
+// state, you log transfers here yourself; they're kept in this browser's
+// localStorage, applied on top of the last-known locked squad, and dropped
+// automatically once the real picks endpoint catches up (see the
+// `forEvent` filtering below).
+const overridesKey = (id) => `fpl_overrides_${id}`;
+const bankOverrideKey = (id) => `fpl_bank_override_${id}`;
+
+function loadOverrides(id) {
+  try {
+    const raw = JSON.parse(localStorage.getItem(overridesKey(id)) || '[]');
+    return Array.isArray(raw) ? raw : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveOverrides(id, list) {
+  localStorage.setItem(overridesKey(id), JSON.stringify(list));
+}
+
+function loadBankOverride(id) {
+  const raw = localStorage.getItem(bankOverrideKey(id));
+  if (raw == null) return null;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : null;
+}
+
+function saveBankOverride(id, tenthsOrNull) {
+  if (tenthsOrNull == null) {
+    localStorage.removeItem(bankOverrideKey(id));
+  } else {
+    localStorage.setItem(bankOverrideKey(id), String(tenthsOrNull));
+  }
+}
 
 export default function App() {
   const [teamId, setTeamId] = useState(() => localStorage.getItem(STORAGE_KEY) || '');
@@ -90,11 +130,33 @@ export default function App() {
       const sellPriceById = isLive
         ? Object.fromEntries(myTeam.data.picks.map((p) => [p.element, p.selling_price]))
         : {};
-      const bank = isLive ? myTeam.data.transfers.bank : picksResp.entry_history?.bank ?? 0;
+
+      // Manual transfers logged for a gameweek that hasn't locked in yet
+      // (i.e. still ahead of currentEvent) are applied on top of the
+      // last-known picks here. One that's now behind currentEvent should
+      // already be reflected in picksResp for real, so it's dropped — this
+      // also self-prunes the stored list without you having to clear it by
+      // hand each week.
+      const allOverrides = loadOverrides(id);
+      const activeOverrides = allOverrides.filter((o) => o.forEvent > currentEvent.id);
+      if (activeOverrides.length !== allOverrides.length) saveOverrides(id, activeOverrides);
+
+      const effectivePicks = picksResp.picks.map((p) => ({ ...p }));
+      for (const o of activeOverrides) {
+        const idx = effectivePicks.findIndex((p) => p.element === o.outId);
+        if (idx !== -1) {
+          effectivePicks[idx] = { ...effectivePicks[idx], element: o.inId, is_captain: false, is_vice_captain: false };
+        }
+      }
+
+      const manualBank = loadBankOverride(id);
+      const estimatedBank = isLive ? myTeam.data.transfers.bank : picksResp.entry_history?.bank ?? 0;
+      const bank = manualBank != null ? manualBank : estimatedBank;
+
       const liveFreeTransfers = isLive ? myTeam.data.transfers.limit : null;
       const effectiveFreeTransfers = typeof liveFreeTransfers === 'number' ? liveFreeTransfers : freeTransfers;
 
-      const squad = buildScoredSquad(picksResp.picks, elementsById, ctx, sellPriceById);
+      const squad = buildScoredSquad(effectivePicks, elementsById, ctx, sellPriceById);
       const { starters, bench, formation } = selectBestXI(squad);
       const { captain, viceCaptain } = pickCaptains(starters);
       const captaincyCeiling = findCaptaincyCeiling(squad);
@@ -110,16 +172,22 @@ export default function App() {
       setData({
         teamName: entry.name,
         gwLabel: `Gameweek ${nextEvent.id}`,
+        nextEventId: nextEvent.id,
         deadlineIso: nextEvent.deadline_time,
         starters,
         bench,
+        fullSquad: squad,
         formation,
         captain,
         viceCaptain,
         transferSuggestions,
         chipAdvice,
         bank,
+        bankIsManual: manualBank != null,
         isLive,
+        overrides: activeOverrides,
+        allElements: bootstrap.elements,
+        teamsById: ctx.teamsById,
       });
       setStatus('ready');
     } catch (err) {
@@ -143,6 +211,33 @@ export default function App() {
     setTeamId('');
     setData(null);
     setStatus('idle');
+  };
+
+  const handleAddOverride = (outId, inId) => {
+    if (!data) return;
+    const outName = data.fullSquad.find((p) => p.element === outId)?.webName ?? `#${outId}`;
+    const inName = data.allElements.find((e) => e.id === inId)?.web_name ?? `#${inId}`;
+    const record = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      forEvent: data.nextEventId,
+      outId,
+      outName,
+      inId,
+      inName,
+    };
+    saveOverrides(teamId, [...data.overrides, record]);
+    load(teamId);
+  };
+
+  const handleRemoveOverride = (id) => {
+    if (!data) return;
+    saveOverrides(teamId, data.overrides.filter((o) => o.id !== id));
+    load(teamId);
+  };
+
+  const handleBankChange = (tenthsOrNull) => {
+    saveBankOverride(teamId, tenthsOrNull);
+    load(teamId);
   };
 
   if (!teamId) {
@@ -176,6 +271,19 @@ export default function App() {
         onReset={handleReset}
       />
 
+      <SquadOverrides
+        squad={data.fullSquad}
+        allElements={data.allElements}
+        teamsById={data.teamsById}
+        overrides={data.overrides}
+        bankTenths={data.bank}
+        bankIsManual={data.bankIsManual}
+        nextEventLabel={data.gwLabel}
+        onAdd={handleAddOverride}
+        onRemove={handleRemoveOverride}
+        onBankChange={handleBankChange}
+      />
+
       <div className="section">
         <div className="section-head">
           <h2 className="section-title">Starting XI</h2>
@@ -206,7 +314,9 @@ export default function App() {
             ))}
           </select>
         </div>
-        <span className="section-note">Bank £{(data.bank / 10).toFixed(1)}m</span>
+        <span className="section-note">
+          Bank £{(data.bank / 10).toFixed(1)}m{data.bankIsManual ? ' (manual)' : ''}
+        </span>
         <span className="section-note" style={{ color: data.isLive ? 'var(--turf-bright)' : 'var(--chalk-dim)' }}>
           {data.isLive ? '● Live prices from your account' : '○ Estimated prices'}
         </span>
@@ -238,9 +348,10 @@ export default function App() {
         prior — both fade out automatically as this season's own numbers fill in. Set-piece
         duty, recent-form trend, and single-game-outlier flags are shown alongside players as
         extra context — they don't change any score or ranking, just what you see next to it.{' '}
-        {data.isLive
-          ? 'Sell prices and bank are pulled live from your FPL account.'
-          : "Sell prices are approximated from current market value — set FPL_EMAIL / FPL_PASSWORD in Vercel to pull your account's exact numbers instead."}{' '}
+        Player prices always reflect today's market (that part of FPL's API needs no login);
+        what your account login would normally add — exact sell prices, bank, and same-week
+        transfer visibility — isn't available right now (see the "Squad adjustments" box above
+        to log transfers by hand instead).{' '}
         This is a planning aid built on public data, not a guarantee — always sanity-check
         flagged players and confirmed lineups before the deadline.
       </div>
